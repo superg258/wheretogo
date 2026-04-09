@@ -14,7 +14,7 @@ from rmuc_analyzer.engine import (
     compute_national_quotas,
     compute_pressure,
     fallback_ranking_from_national,
-    infer_top16_counts,
+    infer_top16_counts_from_current_signup,
     load_rmu_ranking,
     predict_reallocation,
 )
@@ -44,26 +44,6 @@ def parse_args() -> argparse.Namespace:
         help="最大轮询次数，0表示不限，仅在非 --once 模式有效",
     )
     return parser.parse_args()
-
-
-def _resolve_top16_counts(
-    config: AnalyzerConfig,
-    national_records,
-    distance_map,
-) -> tuple[Dict[str, int], List[str]]:
-    notes: List[str] = []
-
-    if config.manual_top16_counts:
-        counts = {region: int(config.manual_top16_counts.get(region, 0)) for region in REGION_ORDER}
-        notes.append("16强分布来源: 配置覆盖(manual_top16_counts)")
-        return counts, notes
-
-    counts, missing = infer_top16_counts(national_records, distance_map)
-    notes.append("16强分布来源: 根据去年国赛前16学校按距离推断(非官方口径)")
-    if missing:
-        notes.append(f"以下学校缺少距离数据，未计入16强分布: {', '.join(missing)}")
-
-    return counts, notes
 
 
 def _build_runtime_notes(
@@ -160,9 +140,6 @@ def main() -> int:
     else:
         ranking_source_note = "积分榜来源: 本地CSV"
 
-    top16_counts, top16_notes = _resolve_top16_counts(config, national_records, distance_map)
-    quota_result = compute_national_quotas(top16_counts)
-
     previous_snapshot: Optional[QingflowSnapshot] = load_snapshot(cache_file)
 
     iteration = 0
@@ -185,6 +162,19 @@ def main() -> int:
                 raise RuntimeError(f"青流抓取失败且没有缓存: {exc}") from exc
             snapshot = cached
             loop_notes.append(f"青流抓取失败，已回退缓存: {exc}")
+
+        if config.manual_top16_counts:
+            top16_counts = {region: int(config.manual_top16_counts.get(region, 0)) for region in REGION_ORDER}
+            loop_notes.append("16强分布来源: 配置覆盖(manual_top16_counts)")
+        else:
+            top16_counts = infer_top16_counts_from_current_signup(snapshot, national_records)
+            loop_notes.append("16强分布来源: 当前志愿中去年的16强实际报名数(实时)")
+        loop_notes.append(
+            "本轮16强实时计数: "
+            f"南部={top16_counts['南部']}、东部={top16_counts['东部']}、北部={top16_counts['北部']}"
+        )
+
+        quota_result = compute_national_quotas(top16_counts)
 
         pressure = compute_pressure(snapshot, capacity=config.capacity_per_region)
         moves = predict_reallocation(

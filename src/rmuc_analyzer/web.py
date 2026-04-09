@@ -12,10 +12,12 @@ from rmuc_analyzer.cache import load_snapshot, save_snapshot
 from rmuc_analyzer.config import AnalyzerConfig
 from rmuc_analyzer.constants import REGION_DISPLAY, REGION_ORDER
 from rmuc_analyzer.engine import (
+    apply_reallocation_moves_to_counts,
+    build_effective_region_counts,
     compute_national_quotas,
     estimate_resurrection_quotas,
     fallback_ranking_from_national,
-    infer_top16_counts,
+    infer_top16_counts_from_current_signup,
     load_rmu_ranking,
     predict_reallocation,
 )
@@ -43,7 +45,6 @@ class AnalyzerRuntime:
     national_records: Dict[str, Any]
     ranking_map: Dict[str, int]
     priority_schools: List[str]
-    quota_result: Any
     static_notes: List[str]
 
 
@@ -86,17 +87,6 @@ def _build_runtime(root_dir: Path, config: AnalyzerConfig) -> AnalyzerRuntime:
         ranking_map = fallback_ranking_from_national(national_records)
         notes.append("积分榜来源: 未提供RMU积分榜CSV，已使用去年国赛顺位兜底")
 
-    top16_counts, missing = infer_top16_counts(national_records, distance_map)
-    if config.manual_top16_counts:
-        top16_counts = {region: int(config.manual_top16_counts.get(region, 0)) for region in REGION_ORDER}
-        notes.append("国赛名额来源: manual_top16_counts配置")
-    else:
-        notes.append("国赛名额来源: 去年前16按距离推断（模拟）")
-    if missing:
-        notes.append(f"去年前16缺少距离数据: {', '.join(missing)}")
-
-    quota_result = compute_national_quotas(top16_counts)
-
     priority_schools = list(config.priority_schools)
     merged = {normalize_school_name(s): s for s in priority_schools}
 
@@ -132,7 +122,6 @@ def _build_runtime(root_dir: Path, config: AnalyzerConfig) -> AnalyzerRuntime:
         national_records=national_records,
         ranking_map=ranking_map,
         priority_schools=priority_schools,
-        quota_result=quota_result,
         static_notes=notes,
     )
 
@@ -177,13 +166,14 @@ def _format_performance(rec: Optional[Any]) -> str:
 def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
     snapshot, runtime_notes = _snapshot_with_cache(runtime)
 
-    resurrection = estimate_resurrection_quotas(
-        runtime.quota_result,
-        snapshot.region_counts,
-        resurrection_total=16,
-        min_total_advancement=8,
-        max_total_advancement=16,
-    )
+    if runtime.config.manual_top16_counts:
+        top16_counts = {region: int(runtime.config.manual_top16_counts.get(region, 0)) for region in REGION_ORDER}
+        quota_source_note = "国赛名额来源: manual_top16_counts配置"
+    else:
+        top16_counts = infer_top16_counts_from_current_signup(snapshot, runtime.national_records)
+        quota_source_note = "国赛名额来源: 当前志愿中去年的16强实际报名数（实时）"
+
+    quota_result = compute_national_quotas(top16_counts)
 
     moves = predict_reallocation(
         snapshot=snapshot,
@@ -192,6 +182,21 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
         priority_schools=runtime.priority_schools,
         capacity=runtime.config.capacity_per_region,
         expected_total=runtime.config.expected_total_teams,
+    )
+
+    effective_counts = build_effective_region_counts(
+        snapshot.region_counts,
+        expected_total=runtime.config.expected_total_teams,
+        minimum_per_region=8,
+    )
+    effective_counts = apply_reallocation_moves_to_counts(effective_counts, moves)
+
+    resurrection = estimate_resurrection_quotas(
+        quota_result,
+        effective_counts,
+        resurrection_total=16,
+        min_total_advancement=8,
+        max_total_advancement=16,
     )
     move_map = {normalize_school_name(m.school): m.to_region for m in moves}
     priority_key_set = {normalize_school_name(s) for s in runtime.priority_schools}
@@ -239,7 +244,7 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
                 }
             )
 
-        national_quota = runtime.quota_result.items[region].total_quota
+        national_quota = quota_result.items[region].total_quota
         resurrection_quota = resurrection.get(region, 0)
         volunteers = snapshot.region_counts.get(region, 0)
 
@@ -247,6 +252,7 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
             {
                 "region": region,
                 "region_display": REGION_DISPLAY[region],
+                "top16_signed_count": top16_counts[region],
                 "national_quota": national_quota,
                 "resurrection_quota": resurrection_quota,
                 "volunteers": volunteers,
@@ -258,6 +264,15 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
     total_submitted = sum(snapshot.region_counts.get(region, 0) for region in REGION_ORDER)
     notes = list(runtime.static_notes)
     notes.extend(runtime_notes)
+    notes.append(
+        "本轮16强实时计数: "
+        f"南部={top16_counts['南部']}、东部={top16_counts['东部']}、北部={top16_counts['北部']}"
+    )
+    notes.append(quota_source_note)
+    if total_submitted < runtime.config.expected_total_teams:
+        notes.append("复活赛估算口径: 报名未满时先按赛区补足8，再叠加预测调配后进行分配")
+    elif moves:
+        notes.append("复活赛估算口径: 已按预测调配后的赛区人数进行分配")
     notes.append("复活赛名额为模拟估算，官方最终分配以组委会公告为准")
 
     return {

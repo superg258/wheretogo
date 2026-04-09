@@ -20,6 +20,11 @@ _HEADERS = {
 }
 
 _ANNOUNCEMENT_ID_PATTERN = re.compile(r"/announcement/(\d+)")
+_REGIONAL_2025_TO_2026 = {
+    "南部赛区": "南部",
+    "中部赛区": "东部",
+    "东部赛区": "北部",
+}
 
 
 def _is_remote_source(source: str) -> bool:
@@ -238,6 +243,53 @@ def parse_rmul_host_schools_2026(rmul_url: str, timeout_sec: int = 20) -> List[s
         raise ValueError("1903公告解析失败，未得到RMUL承办院校")
 
     return hosts
+
+
+def parse_regional_signup_regions_2025(regional_url: str, timeout_sec: int = 20) -> Dict[str, str]:
+    html = fetch_html(regional_url, timeout_sec)
+    tables = _extract_tables(html)
+    table = _find_table_with_headers(tables, ["排名", "学校", "队伍", "奖项"])
+    if table is None:
+        raise ValueError("未在1847公告中找到区域赛名单表")
+
+    school_region_map: Dict[str, str] = {}
+    current_region_2026: Optional[str] = None
+
+    for row in table:
+        if len(row) == 1 and "赛区获奖名单" in row[0]:
+            title = clean_text(row[0])
+            current_region_2026 = None
+            for region_2025, region_2026 in _REGIONAL_2025_TO_2026.items():
+                if region_2025 in title:
+                    current_region_2026 = region_2026
+                    break
+            continue
+
+        if not row:
+            continue
+        if row[0] == "排名":
+            continue
+        if current_region_2026 is None:
+            continue
+
+        # 1847存在rowspan导致“排名”列可能缺失，行宽会在4/5列之间波动。
+        school = ""
+        if len(row) >= 5:
+            school = clean_text(row[1])
+        elif len(row) >= 4:
+            school = clean_text(row[0])
+
+        if not school:
+            continue
+
+        key = normalize_school_name(school)
+        if key not in school_region_map:
+            school_region_map[key] = current_region_2026
+
+    if not school_region_map:
+        raise ValueError("1847公告解析失败，未得到学校赛区报名映射")
+
+    return school_region_map
 
 
 def infer_overseas_priority_schools_2026(

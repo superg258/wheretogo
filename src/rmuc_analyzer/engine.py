@@ -64,6 +64,50 @@ def infer_top16_counts(
     return counts, missing
 
 
+def infer_top16_counts_from_regional_signup(
+    national_records: Dict[str, NationalTierRecord],
+    school_region_map: Dict[str, str],
+) -> Tuple[Dict[str, int], List[str]]:
+    counts = {region: 0 for region in REGION_ORDER}
+    missing: List[str] = []
+
+    for school_key, record in national_records.items():
+        if record.tier not in TOP16_TIERS:
+            continue
+
+        region = school_region_map.get(school_key)
+        if region not in counts:
+            missing.append(record.school)
+            continue
+
+        counts[region] += 1
+
+    return counts, missing
+
+
+def infer_top16_counts_from_current_signup(
+    snapshot: QingflowSnapshot,
+    national_records: Dict[str, NationalTierRecord],
+) -> Dict[str, int]:
+    counts = {region: 0 for region in REGION_ORDER}
+    seen_top16_keys: Set[str] = set()
+
+    for region in REGION_ORDER:
+        for school in snapshot.region_schools.get(region, []):
+            key = normalize_school_name(school)
+            if key in seen_top16_keys:
+                continue
+
+            rec = national_records.get(key)
+            if rec is None or rec.tier not in TOP16_TIERS:
+                continue
+
+            counts[region] += 1
+            seen_top16_keys.add(key)
+
+    return counts
+
+
 def compute_national_quotas(
     top16_counts: Dict[str, int],
     base_quota: int = 8,
@@ -206,6 +250,37 @@ def estimate_resurrection_quotas(
     return current
 
 
+def build_effective_region_counts(
+    region_counts: Dict[str, int],
+    expected_total: int,
+    minimum_per_region: int = 8,
+) -> Dict[str, int]:
+    counts = {region: max(0, int(region_counts.get(region, 0))) for region in REGION_ORDER}
+
+    # 报名未满时，为避免早期分布过度偏斜，先按规则下限补到8再做后续调配估算。
+    if sum(counts.values()) < expected_total:
+        for region in REGION_ORDER:
+            counts[region] = max(counts[region], minimum_per_region)
+
+    return counts
+
+
+def apply_reallocation_moves_to_counts(
+    region_counts: Dict[str, int],
+    moves: Iterable[ReallocationMove],
+) -> Dict[str, int]:
+    updated = {region: max(0, int(region_counts.get(region, 0))) for region in REGION_ORDER}
+
+    for move in moves:
+        if move.from_region not in updated or move.to_region not in updated:
+            continue
+        if updated[move.from_region] > 0:
+            updated[move.from_region] -= 1
+        updated[move.to_region] += 1
+
+    return updated
+
+
 def compute_pressure(snapshot: QingflowSnapshot, capacity: int = 32) -> Dict[str, PressureItem]:
     pressure: Dict[str, PressureItem] = {}
     for region in REGION_ORDER:
@@ -269,22 +344,44 @@ def predict_reallocation(
     submitted = sum(counts.values())
     has_ranking = bool(ranking_map)
     moves: List[ReallocationMove] = []
+    total_surplus = sum(max(0, counts[region] - capacity) for region in REGION_ORDER)
+    remaining_required_moves = total_surplus
 
     # 仅当出现超容量赛区时，才存在明确的“被调剂”对象。
-    if not any(value > capacity for value in counts.values()):
+    if total_surplus <= 0:
         return moves
 
-    target_regions = sorted(REGION_ORDER, key=lambda region: (counts[region], REGION_ORDER.index(region)))
+    # 规则顺序：
+    # 1) 先按志愿数从少到多确定 A<B<C，先补A（从B/C调剂）。
+    # 2) A调剂结束后，仅在B/C之间继续调剂，直至两者满足容量。
+    ordered_regions = sorted(REGION_ORDER, key=lambda region: (counts[region], REGION_ORDER.index(region)))
+    region_a, region_b, region_c = ordered_regions
 
-    for target in target_regions:
-        deficit = capacity - counts[target]
+    adjustment_phases = [
+        (region_a, [region_b, region_c]),
+    ]
+
+    remaining_regions = [region_b, region_c]
+    remaining_ordered = sorted(
+        remaining_regions,
+        key=lambda region: (counts[region], REGION_ORDER.index(region)),
+    )
+    adjustment_phases.append((remaining_ordered[0], [remaining_ordered[1]]))
+
+    for target, donor_regions in adjustment_phases:
+        deficit_raw = capacity - counts[target]
+        deficit = deficit_raw
+
+        # 报名未满时，仅输出“当前已确定必须调剂”的队伍数量：
+        # 即把超容量赛区的溢出人数分配出去，不提前补齐全部缺口到32。
+        if submitted < expected_total:
+            deficit = min(deficit_raw, remaining_required_moves)
+
         if deficit <= 0:
             continue
 
         candidates: List[Tuple[int, int, str, str, Optional[int]]] = []
-        for donor in REGION_ORDER:
-            if donor == target:
-                continue
+        for donor in donor_regions:
             for school in assignments[donor]:
                 school_key = normalize_school_name(school)
                 if school_key in moved_keys:
@@ -297,7 +394,7 @@ def predict_reallocation(
                     continue
 
                 rank_value = ranking_map.get(school_key)
-                # 排名越靠后（数值越大）越优先被调剂。
+                # 同城时按积分榜排名靠后者优先调剂（数值越大越靠后）。
                 rank_for_sort = rank_value if rank_value is not None else -1
                 candidates.append((distance_km, -rank_for_sort, donor, school, rank_value))
 
@@ -321,9 +418,14 @@ def predict_reallocation(
                     distance_km=distance_km,
                     ranking_value=rank_value,
                     confidence=_confidence_label(submitted, expected_total, has_ranking),
-                    reason="地理就近+积分榜同城排序",
+                    reason="志愿优先录取+地理就近调剂",
                 )
             )
+            if remaining_required_moves > 0:
+                remaining_required_moves -= 1
+
+        if submitted < expected_total and remaining_required_moves <= 0:
+            break
 
     return moves
 

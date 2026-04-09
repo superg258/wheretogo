@@ -132,3 +132,87 @@ def test_infer_overseas_priority_schools_from_city_and_name():
     assert "香港科技大学" in overseas
     assert "香港科技大学（广州）" not in overseas
     assert "华南理工大学" not in overseas
+
+
+def test_reallocation_follows_a_then_b_c_stages_without_a_as_second_stage_donor():
+    # 初始志愿数：南1、东4、北4（capacity=3）
+    # 先补A=南部（从东/北调2支），再仅在东北之间继续调剂。
+    snapshot = QingflowSnapshot(
+        fetched_at=datetime.now(timezone.utc),
+        source_url="test",
+        region_counts={"南部": 1, "东部": 4, "北部": 4},
+        region_schools={
+            "南部": ["S1"],
+            "东部": ["E1", "E2", "E3", "E4"],
+            "北部": ["N1", "N2", "N3", "N4"],
+        },
+        stale=False,
+    )
+
+    distance_map = {
+        # 引导第一阶段优先从东部调往南部
+        "E1": DistanceRecord("E1", "E", 10, 5, 50),
+        "E2": DistanceRecord("E2", "E", 11, 5, 50),
+        "E3": DistanceRecord("E3", "E", 12, 5, 50),
+        "E4": DistanceRecord("E4", "E", 13, 5, 50),
+        "N1": DistanceRecord("N1", "N", 100, 20, 5),
+        "N2": DistanceRecord("N2", "N", 101, 20, 5),
+        "N3": DistanceRecord("N3", "N", 102, 20, 5),
+        "N4": DistanceRecord("N4", "N", 103, 20, 5),
+        # 若错误允许A在第二阶段供给，会优先挑中S1（应被禁止）
+        "S1": DistanceRecord("S1", "S", 1, 1, 100),
+    }
+
+    moves = predict_reallocation(
+        snapshot=snapshot,
+        distance_map=distance_map,
+        ranking_map={},
+        priority_schools=[],
+        capacity=3,
+        expected_total=9,
+    )
+
+    assert len(moves) == 3
+    assert [m.to_region for m in moves[:2]] == ["南部", "南部"]
+    assert moves[2].to_region == "东部"
+    # 第二阶段只能在东/北之间调剂，不允许再从南部调出
+    assert all(m.from_region != "南部" for m in moves)
+
+
+def test_reallocation_in_incomplete_signup_only_marks_required_surplus_moves():
+    # 报名未满(expected_total=12, submitted=7)时，东部仅超容量1支，
+    # 只应标记1支“当前必须调剂”的队伍。
+    snapshot = QingflowSnapshot(
+        fetched_at=datetime.now(timezone.utc),
+        source_url="test",
+        region_counts={"南部": 1, "东部": 4, "北部": 2},
+        region_schools={
+            "南部": ["S1"],
+            "东部": ["E1", "E2", "E3", "E4"],
+            "北部": ["N1", "N2"],
+        },
+        stale=False,
+    )
+
+    distance_map = {
+        "E1": DistanceRecord("E1", "E", 10, 1, 100),
+        "E2": DistanceRecord("E2", "E", 11, 1, 100),
+        "E3": DistanceRecord("E3", "E", 12, 1, 100),
+        "E4": DistanceRecord("E4", "E", 13, 1, 100),
+        "N1": DistanceRecord("N1", "N", 20, 100, 1),
+        "N2": DistanceRecord("N2", "N", 21, 100, 1),
+        "S1": DistanceRecord("S1", "S", 1, 1, 1),
+    }
+
+    moves = predict_reallocation(
+        snapshot=snapshot,
+        distance_map=distance_map,
+        ranking_map={},
+        priority_schools=[],
+        capacity=3,
+        expected_total=12,
+    )
+
+    assert len(moves) == 1
+    assert moves[0].from_region == "东部"
+    assert moves[0].to_region == "南部"
