@@ -39,7 +39,6 @@ DEFAULT_ANNOUNCEMENT_URLS = {
     "teams_2026": "https://www.robomaster.com/zh-CN/resource/pages/announcement/1909",
     "rules_2026": "https://www.robomaster.com/zh-CN/resource/pages/announcement/1910",
     "ranking_2025": "https://www.robomaster.com/zh-CN/resource/pages/announcement/1884",
-    "rmul_hosts_2026": "https://www.robomaster.com/zh-CN/resource/pages/announcement/1903",
     "national_2025": "https://www.robomaster.com/zh-CN/resource/pages/announcement/1856",
     "regional_2025": "https://www.robomaster.com/zh-CN/resource/pages/announcement/1847",
 }

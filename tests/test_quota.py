@@ -1,11 +1,13 @@
 from datetime import datetime, timezone
 
 from rmuc_analyzer.engine import (
+    apply_reallocation_moves_to_region_schools,
     compute_national_quotas,
     infer_top16_counts_from_current_signup,
+    infer_top16_counts_from_region_schools,
     infer_top16_counts_from_regional_signup,
 )
-from rmuc_analyzer.models import NationalTierRecord, QingflowSnapshot
+from rmuc_analyzer.models import NationalTierRecord, QingflowSnapshot, ReallocationMove
 
 
 def test_floating_quota_threshold_gt_four():
@@ -107,3 +109,56 @@ def test_infer_top16_counts_from_current_signup_deduplicates_school():
     counts = infer_top16_counts_from_current_signup(snapshot, records)
 
     assert sum(counts.values()) == 1
+
+
+def test_apply_reallocation_moves_to_region_schools_updates_membership():
+    region_schools = {
+        "南部": ["S1"],
+        "东部": ["E1", "E2"],
+        "北部": ["N1"],
+    }
+    moves = [
+        ReallocationMove(
+            school="E2",
+            from_region="东部",
+            to_region="南部",
+            distance_km=100,
+            ranking_value=20,
+            confidence="中",
+            reason="test",
+        )
+    ]
+
+    adjusted = apply_reallocation_moves_to_region_schools(region_schools, moves)
+
+    assert "E2" not in adjusted["东部"]
+    assert "E2" in adjusted["南部"]
+
+
+def test_infer_top16_counts_from_region_schools_after_reallocation():
+    records = {
+        "S1": NationalTierRecord("S1", "S", "冠军", 1),
+        "E2": NationalTierRecord("E2", "E", "八强", 8),
+        "N1": NationalTierRecord("N1", "N", "十六强", 16),
+    }
+    original = {
+        "南部": ["S1"],
+        "东部": ["E2"],
+        "北部": ["N1"],
+    }
+    moves = [
+        ReallocationMove(
+            school="E2",
+            from_region="东部",
+            to_region="南部",
+            distance_km=100,
+            ranking_value=20,
+            confidence="中",
+            reason="test",
+        )
+    ]
+
+    adjusted = apply_reallocation_moves_to_region_schools(original, moves)
+    counts = infer_top16_counts_from_region_schools(adjusted, records)
+
+    assert counts == {"南部": 2, "东部": 0, "北部": 1}

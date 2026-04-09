@@ -52,6 +52,27 @@ def render_quota_table(quota_result: QuotaResult) -> List[str]:
     return lines
 
 
+def render_resurrection_table(
+    quota_result: QuotaResult,
+    resurrection_quotas: Dict[str, int],
+) -> List[str]:
+    lines = [
+        "赛区  | 预计国赛名额 | 预计复活赛名额 | 预计总晋级",
+        "----- | ------------ | -------------- | ----------",
+    ]
+    total_resurrection = 0
+    for region in REGION_ORDER:
+        national_quota = quota_result.items[region].total_quota
+        resurrection_quota = int(resurrection_quotas.get(region, 0))
+        total_resurrection += resurrection_quota
+        lines.append(
+            f"{region}  | {national_quota:>12} | {resurrection_quota:>14} | {national_quota + resurrection_quota:>10}"
+        )
+
+    lines.append(f"合计预计复活赛名额: {total_resurrection}")
+    return lines
+
+
 def render_pressure_table(pressure: Dict[str, PressureItem]) -> List[str]:
     lines = [
         "赛区  | 当前志愿 | 容量 | 缺口 | 超额",
@@ -95,6 +116,7 @@ def render_highlights(highlights: Dict[str, str]) -> List[str]:
 def render_full_report(
     snapshot: QingflowSnapshot,
     quota_result: QuotaResult,
+    resurrection_quotas: Optional[Dict[str, int]],
     pressure: Dict[str, PressureItem],
     moves: Iterable[ReallocationMove],
     highlights: Dict[str, str],
@@ -115,6 +137,11 @@ def render_full_report(
     report_lines.append("[国赛名额估算]")
     report_lines.extend(render_quota_table(quota_result))
     report_lines.append(_line())
+
+    if resurrection_quotas is not None:
+        report_lines.append("[复活赛名额估算]")
+        report_lines.extend(render_resurrection_table(quota_result, resurrection_quotas))
+        report_lines.append(_line())
 
     report_lines.append("[赛区容量压力]")
     report_lines.extend(render_pressure_table(pressure))

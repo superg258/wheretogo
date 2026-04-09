@@ -242,10 +242,42 @@
         border-color: #ffc9ac;
       }
 
+      .tag-status-out {
+        color: #9a3b0b;
+        background: #ffe7da;
+        border-color: #ffcdb4;
+      }
+
+      .tag-status-in {
+        color: #51610f;
+        background: #edf7d6;
+        border-color: #d2e7a1;
+      }
+
+      .tag-status-none {
+        color: #667785;
+        background: #f4f7fb;
+        border-color: #dbe4ec;
+      }
+
       .tag-none {
         color: #667785;
         background: #f4f7fb;
         border-color: #dbe4ec;
+      }
+
+      .move-hint {
+        margin-left: 6px;
+        color: #5e6e7b;
+        font-size: 11px;
+      }
+
+      .row-ghost td {
+        opacity: 0.56;
+      }
+
+      .row-ghost .school {
+        font-style: italic;
       }
 
       .row-empty td {
@@ -270,7 +302,7 @@
     <div class="shell">
       <section class="hero">
         <h1 class="title">RMUC 2026 三赛区志愿分析网页</h1>
-        <p class="sub">排序规则：先按去年国赛排名，再按积分排名；优先队伍受保护；若触发调剂会显示可能去向。</p>
+        <p class="sub">排序规则：先按去年国赛排名，再按积分排名；被预测调剂的队伍会虚化并标注调入/调出状态。</p>
         <div class="meta">
           <span class="pill pill-light" id="generatedAt">-</span>
           <span class="pill pill-light" id="submitMeta">-</span>
@@ -320,17 +352,23 @@
             const priorityTag = item.priority
               ? '<span class="tag tag-priority">优先</span>'
               : '<span class="tag tag-normal">普通</span>';
-            const moveTag = item.possible_reallocation !== "-"
-              ? `<span class="tag tag-move">${item.possible_reallocation}</span>`
-              : '<span class="tag tag-none">-</span>';
+            const statusTag = item.reallocation_status !== "-"
+              ? (item.reallocation_status.startsWith("调入")
+                  ? `<span class="tag tag-status-in">${item.reallocation_status}</span>`
+                  : `<span class="tag tag-status-out">${item.reallocation_status}</span>`)
+              : '<span class="tag tag-status-none">-</span>';
+            const moveHint = item.reallocation_hint !== "-"
+              ? `<span class="move-hint">${item.reallocation_hint}</span>`
+              : "";
+            const rowClass = item.ghost ? "row-ghost" : "";
             return `
-              <tr>
+              <tr class="${rowClass}">
                 <td>${item.sort_index}</td>
                 <td class="school">${item.school}</td>
                 <td>${rankText(item.national_rank, item.point_rank)}</td>
                 <td class="col-performance">${item.performance}</td>
                 <td class="col-nowrap">${priorityTag}</td>
-                <td class="col-nowrap">${moveTag}</td>
+                <td class="col-nowrap">${statusTag}${moveHint}</td>
               </tr>
             `;
           })
@@ -343,8 +381,9 @@
               <div class="quota-row">
                 <span class="quota">国赛名额 <b>${region.national_quota}</b></span>
                 <span class="quota">复活赛名额 <b>${region.resurrection_quota}</b></span>
-                <span class="quota">去年16强已报名 <b>${region.top16_signed_count}</b></span>
+                <span class="quota">去年16强(调剂后) <b>${region.top16_signed_count}</b></span>
                 <span class="quota">当前志愿 <b>${region.volunteers}/${region.capacity}</b></span>
+                <span class="quota">调剂后估算 <b>${region.projected_volunteers}/${region.capacity}</b></span>
               </div>
             </header>
             <div class="table-wrap">
@@ -356,7 +395,7 @@
                     <th>排名</th>
                     <th class="col-performance">成绩</th>
                     <th>优先</th>
-                    <th>当前需调剂</th>
+                    <th>调剂状态</th>
                   </tr>
                 </thead>
                 <tbody>

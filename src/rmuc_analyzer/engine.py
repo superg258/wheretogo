@@ -85,15 +85,15 @@ def infer_top16_counts_from_regional_signup(
     return counts, missing
 
 
-def infer_top16_counts_from_current_signup(
-    snapshot: QingflowSnapshot,
+def infer_top16_counts_from_region_schools(
+    region_schools: Dict[str, List[str]],
     national_records: Dict[str, NationalTierRecord],
 ) -> Dict[str, int]:
     counts = {region: 0 for region in REGION_ORDER}
     seen_top16_keys: Set[str] = set()
 
     for region in REGION_ORDER:
-        for school in snapshot.region_schools.get(region, []):
+        for school in region_schools.get(region, []):
             key = normalize_school_name(school)
             if key in seen_top16_keys:
                 continue
@@ -106,6 +106,13 @@ def infer_top16_counts_from_current_signup(
             seen_top16_keys.add(key)
 
     return counts
+
+
+def infer_top16_counts_from_current_signup(
+    snapshot: QingflowSnapshot,
+    national_records: Dict[str, NationalTierRecord],
+) -> Dict[str, int]:
+    return infer_top16_counts_from_region_schools(snapshot.region_schools, national_records)
 
 
 def compute_national_quotas(
@@ -277,6 +284,43 @@ def apply_reallocation_moves_to_counts(
         if updated[move.from_region] > 0:
             updated[move.from_region] -= 1
         updated[move.to_region] += 1
+
+    return updated
+
+
+def apply_reallocation_moves_to_region_schools(
+    region_schools: Dict[str, List[str]],
+    moves: Iterable[ReallocationMove],
+) -> Dict[str, List[str]]:
+    updated = {
+        region: list(region_schools.get(region, []))
+        for region in REGION_ORDER
+    }
+
+    for move in moves:
+        if move.from_region not in updated or move.to_region not in updated:
+            continue
+
+        school_key = normalize_school_name(move.school)
+        school_name = move.school
+
+        donor_list = updated[move.from_region]
+        remove_idx: Optional[int] = None
+        for idx, school in enumerate(donor_list):
+            if normalize_school_name(school) == school_key:
+                remove_idx = idx
+                break
+
+        if remove_idx is not None:
+            school_name = donor_list.pop(remove_idx)
+
+        target_list = updated[move.to_region]
+        exists_in_target = any(
+            normalize_school_name(existing) == school_key
+            for existing in target_list
+        )
+        if not exists_in_target:
+            target_list.append(school_name)
 
     return updated
 
