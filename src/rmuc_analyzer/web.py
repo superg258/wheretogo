@@ -28,6 +28,7 @@ from rmuc_analyzer.sources.robomaster import (
     parse_distance_table_2026,
     parse_national_tiers_2025,
     parse_rmu_ranking_2025,
+    parse_rmul_host_schools_2026,
     parse_teams_2026,
 )
 from rmuc_analyzer.utils import normalize_school_name
@@ -87,7 +88,22 @@ def _build_runtime(root_dir: Path, config: AnalyzerConfig) -> AnalyzerRuntime:
         notes.append("积分榜来源: 未提供RMU积分榜CSV，已使用去年国赛顺位兜底")
 
     priority_schools = list(config.priority_schools)
-    notes.append("优先: 仅使用配置 priority_schools")
+    merged = {normalize_school_name(s): s for s in priority_schools}
+
+    rmul_url = announcement_sources.get("rmul_hosts_2026")
+    if rmul_url:
+        try:
+            rmul_hosts = parse_rmul_host_schools_2026(rmul_url, config.request_timeout_sec)
+            for school in rmul_hosts:
+                key = normalize_school_name(school)
+                if key not in merged:
+                    merged[key] = school
+                    priority_schools.append(school)
+            notes.append(f"优先: 配置 priority_schools + RMUL承办院校(1903)共{len(rmul_hosts)}所")
+        except Exception as exc:
+            notes.append(f"优先: RMUL承办院校解析失败，已回退为仅配置优先名单({exc})")
+    else:
+        notes.append("优先: 未配置RMUL承办院校公告链接，已使用仅配置优先名单")
 
     return AnalyzerRuntime(
         root_dir=root_dir,

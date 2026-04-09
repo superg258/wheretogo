@@ -112,14 +112,14 @@ cp config/config.example.json config/config.json
    - `false`：优先联网更新，失败再用本地。
    - `true`：只读本地，不联网。
 8. `manual_top16_counts`：手动覆盖 16 强分布（一般留 `null`）。
-9. `priority_schools`：优先名单（当前仅来自这个配置项）。
+9. `priority_schools`：你手工维护的优先名单（会和 RMUL 9 个承办院校合并）。
 10. `rmu_ranking_csv`：积分榜 CSV 路径。
 11. `cache_file`：实时抓取缓存文件路径。
 12. `request_timeout_sec`：网络超时时间（秒）。
 
 ## 程序规则口径（避免误解）
 
-1. 优先名单来源：仅 `priority_schools`（不自动引入 RMUL/海外规则）。
+1. 优先名单来源：`priority_schools` + RMUL 2026 九个承办院校（来自 1903 承办院校名单）；不启用海外优先。
 2. 调剂预测只在出现超容量赛区时触发。
 3. 国赛与复活赛名额按当前口径实时估算，不代表官方最终结果。
 4. 报名未满时，复活赛估算会先做最低约束补齐后再分配。

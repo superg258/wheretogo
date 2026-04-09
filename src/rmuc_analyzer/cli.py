@@ -29,8 +29,10 @@ from rmuc_analyzer.sources.robomaster import (
     localize_announcement_sources,
     parse_distance_table_2026,
     parse_national_tiers_2025,
+    parse_rmul_host_schools_2026,
     parse_teams_2026,
 )
+from rmuc_analyzer.utils import normalize_school_name
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,7 +67,7 @@ def _build_runtime_notes(
     else:
         notes.append("当前未出现超容量赛区，暂无确定调剂对象")
 
-    notes.append(f"优先学校(配置项): {', '.join(priority_schools)}")
+    notes.append(f"优先学校(配置项+RMUL承办院校): {', '.join(priority_schools)}")
 
     for region in REGION_ORDER:
         visible = len(snapshot.region_schools.get(region, []))
@@ -105,7 +107,22 @@ def main() -> int:
     priority_school_notes: List[str] = []
     configured_priority = list(config.priority_schools)
     all_priority_schools = list(configured_priority)
-    priority_school_notes.append("优先名单来源: 仅使用配置 priority_schools")
+
+    rmul_hosts_url = announcement_sources.get("rmul_hosts_2026")
+    if rmul_hosts_url:
+        try:
+            rmul_hosts = parse_rmul_host_schools_2026(rmul_hosts_url, config.request_timeout_sec)
+            merged = {normalize_school_name(s): s for s in all_priority_schools}
+            for school in rmul_hosts:
+                key = normalize_school_name(school)
+                if key not in merged:
+                    merged[key] = school
+                    all_priority_schools.append(school)
+            priority_school_notes.append(f"优先名单来源: 配置 priority_schools + RMUL承办院校(1903)共{len(rmul_hosts)}所")
+        except Exception as exc:
+            priority_school_notes.append(f"RMUL承办院校解析失败，已回退为仅配置优先名单: {exc}")
+    else:
+        priority_school_notes.append("未配置RMUL承办院校公告链接，已使用仅配置优先名单")
 
     ranking_map = load_rmu_ranking(str(ranking_csv))
     if not ranking_map:
