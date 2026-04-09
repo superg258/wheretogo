@@ -1,0 +1,88 @@
+name: Deploy static snapshot to GitHub Pages
+
+# Renders the Flask dashboard to a static snapshot (docs/index.html +
+# docs/data.json) and publishes it to GitHub Pages. Runs on every push that
+# touches the analyzer or the build script, on a schedule so that the
+# published snapshot stays reasonably fresh, and on manual dispatch.
+#
+# Optional: set a repository variable called LIVE_URL (Settings → Secrets
+# and variables → Actions → Variables) to the URL of an always-on Flask
+# backend you deployed (e.g. a Hugging Face Docker Space). When set, the
+# built page gets an extra "⚡ 真·实时版本" button pointing at it, so viewers
+# who need per-request live data can jump from the snapshot mirror to the
+# real backend in one click.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/rmuc_analyzer/**"
+      - "scripts/build_static_site.py"
+      - ".github/workflows/deploy-pages.yml"
+      - "config/config.json"
+      - "data/**"
+  schedule:
+    # Rebuild the snapshot every 30 minutes. 5 minutes is the documented
+    # minimum for scheduled workflows and is best-effort only — don't expect
+    # sub-10-minute freshness here. If you need true real-time, run the
+    # Flask app on a persistent host (see README's "在线部署" section).
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Playwright is optional — the analyzer falls back to requests +
+          # BeautifulSoup, which is what this build uses for speed.
+          pip install Flask requests beautifulsoup4
+
+      - name: Build static snapshot
+        env:
+          LIVE_URL: ${{ vars.LIVE_URL }}
+        run: |
+          if [ -n "$LIVE_URL" ]; then
+            PYTHONPATH=src python scripts/build_static_site.py \
+              --config config/config.json --live-url "$LIVE_URL"
+          else
+            PYTHONPATH=src python scripts/build_static_site.py \
+              --config config/config.json
+          fi
+        # Do not fail the whole deploy if a live scrape fails; re-publish
+        # whatever was committed to docs/ so the site stays up.
+        continue-on-error: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
