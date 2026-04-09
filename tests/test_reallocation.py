@@ -216,3 +216,51 @@ def test_reallocation_in_incomplete_signup_only_marks_required_surplus_moves():
     assert len(moves) == 1
     assert moves[0].from_region == "东部"
     assert moves[0].to_region == "南部"
+
+
+def test_reallocation_recomputes_b_c_after_a_phase_in_full_signup():
+    # 满员场景下，A阶段后B/C可能发生反转；第二阶段必须按“剩余志愿数较少”重新比较。
+    snapshot = QingflowSnapshot(
+        fetched_at=datetime.now(timezone.utc),
+        source_url="test",
+        region_counts={"南部": 20, "东部": 33, "北部": 43},
+        region_schools={
+            "南部": [f"S{i}" for i in range(1, 21)],
+            "东部": [f"E{i}" for i in range(1, 34)],
+            "北部": [f"N{i}" for i in range(1, 44)],
+        },
+        stale=False,
+    )
+
+    # 引导A=南部阶段主要从北部调入，制造B/C反转。
+    distance_map = {}
+    for i in range(1, 21):
+        key = f"S{i}"
+        distance_map[key] = DistanceRecord(key, "S", 0, 500, 500)
+    for i in range(1, 34):
+        key = f"E{i}"
+        distance_map[key] = DistanceRecord(key, "E", 1000, 0, 800)
+    for i in range(1, 44):
+        key = f"N{i}"
+        distance_map[key] = DistanceRecord(key, "N", 1, 800, 0)
+
+    moves = predict_reallocation(
+        snapshot=snapshot,
+        distance_map=distance_map,
+        ranking_map={},
+        priority_schools=[],
+        capacity=32,
+        expected_total=96,
+    )
+
+    final_counts = {"南部": 20, "东部": 33, "北部": 43}
+    for move in moves:
+        final_counts[move.from_region] -= 1
+        final_counts[move.to_region] += 1
+
+    assert final_counts == {"南部": 32, "东部": 32, "北部": 32}
+    # 需要出现第二阶段在东/北之间的调剂。
+    assert any(
+        move.from_region == "东部" and move.to_region == "北部"
+        for move in moves
+    )
