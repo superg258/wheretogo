@@ -211,18 +211,19 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
             key=lambda s: _school_sort_key(s, runtime.national_records, runtime.ranking_map),
         )
 
-        school_rows: List[Dict[str, Any]] = []
+        base_rows: List[Dict[str, Any]] = []
         for school in schools:
             key = normalize_school_name(school)
             rec = runtime.national_records.get(key)
             point_rank = runtime.ranking_map.get(key)
             move = move_by_school.get(key)
+            row_sort_key = _school_sort_key(school, runtime.national_records, runtime.ranking_map)
 
             is_moved_out = bool(move and move.from_region == region)
             reallocation_status = "调出(预测)" if is_moved_out else "-"
             reallocation_hint = f"-> {move.to_region}赛区" if is_moved_out else "-"
 
-            school_rows.append(
+            base_rows.append(
                 {
                     "sort_index": 0,
                     "school": school,
@@ -234,9 +235,13 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
                     "reallocation_hint": reallocation_hint,
                     "ghost": is_moved_out,
                     "empty": False,
+                    "_rank_sort_key": row_sort_key,
+                    # 调出学校保留在原赛区原位置展示，但不参与编号。
+                    "_indexless": is_moved_out,
                 }
             )
 
+        incoming_rows: List[Dict[str, Any]] = []
         incoming_moves = sorted(
             move_in_by_region.get(region, []),
             key=lambda move: _school_sort_key(move.school, runtime.national_records, runtime.ranking_map),
@@ -245,7 +250,8 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
             key = normalize_school_name(move.school)
             rec = runtime.national_records.get(key)
             point_rank = runtime.ranking_map.get(key)
-            school_rows.append(
+            row_sort_key = _school_sort_key(move.school, runtime.national_records, runtime.ranking_map)
+            incoming_rows.append(
                 {
                     "sort_index": 0,
                     "school": move.school,
@@ -257,12 +263,49 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
                     "reallocation_hint": f"来自{move.from_region}赛区",
                     "ghost": True,
                     "empty": False,
+                    "_rank_sort_key": row_sort_key,
+                    "_indexless": False,
                 }
             )
 
-        # 网页固定展示32席位，便于观察缺口。
+        # 调入学校按排名插入到应在位置；调出学校维持在原有位置。
+        active_rows = [row for row in base_rows if not row["_indexless"]]
+        incoming_rows.sort(key=lambda row: row["_rank_sort_key"])
+
+        merged_active_rows: List[Dict[str, Any]] = []
+        active_idx = 0
+        incoming_idx = 0
+        while active_idx < len(active_rows) and incoming_idx < len(incoming_rows):
+            if active_rows[active_idx]["_rank_sort_key"] <= incoming_rows[incoming_idx]["_rank_sort_key"]:
+                merged_active_rows.append(active_rows[active_idx])
+                active_idx += 1
+            else:
+                merged_active_rows.append(incoming_rows[incoming_idx])
+                incoming_idx += 1
+
+        if active_idx < len(active_rows):
+            merged_active_rows.extend(active_rows[active_idx:])
+        if incoming_idx < len(incoming_rows):
+            merged_active_rows.extend(incoming_rows[incoming_idx:])
+
+        school_rows: List[Dict[str, Any]] = []
+        merged_idx = 0
+        for row in base_rows:
+            if row["_indexless"]:
+                school_rows.append(row)
+                continue
+
+            if merged_idx < len(merged_active_rows):
+                school_rows.append(merged_active_rows[merged_idx])
+                merged_idx += 1
+
+        if merged_idx < len(merged_active_rows):
+            school_rows.extend(merged_active_rows[merged_idx:])
+
+        # 网页固定展示32个可编号席位，便于观察缺口。
         target_slots = runtime.config.capacity_per_region
-        for _ in range(len(school_rows) + 1, target_slots + 1):
+        numbered_rows = sum(1 for row in school_rows if not row["_indexless"])
+        while numbered_rows < target_slots:
             school_rows.append(
                 {
                     "sort_index": 0,
@@ -275,11 +318,21 @@ def _build_payload(runtime: AnalyzerRuntime) -> Dict[str, Any]:
                     "reallocation_hint": "-",
                     "ghost": False,
                     "empty": True,
+                    "_rank_sort_key": (1, 10**9, 10**9, "空位"),
+                    "_indexless": False,
                 }
             )
+            numbered_rows += 1
 
-        for idx, row in enumerate(school_rows, start=1):
-            row["sort_index"] = idx
+        display_idx = 1
+        for row in school_rows:
+            if row["_indexless"]:
+                row["sort_index"] = ""
+            else:
+                row["sort_index"] = display_idx
+                display_idx += 1
+            row.pop("_rank_sort_key", None)
+            row.pop("_indexless", None)
 
         national_quota = quota_result.items[region].total_quota
         resurrection_quota = resurrection.get(region, 0)
