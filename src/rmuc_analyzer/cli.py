@@ -16,7 +16,7 @@ from rmuc_analyzer.engine import (
     build_effective_region_counts,
     compute_national_quotas,
     compute_pressure,
-    estimate_resurrection_quotas,
+    estimate_resurrection_quotas_comprehensive,
     fallback_ranking_from_national,
     infer_top16_counts_from_region_schools,
     load_rmu_ranking,
@@ -166,6 +166,10 @@ def main() -> int:
         if config.manual_top16_counts:
             top16_counts = {region: int(config.manual_top16_counts.get(region, 0)) for region in REGION_ORDER}
             loop_notes.append("16强分布来源: 配置覆盖(manual_top16_counts)")
+            adjusted_region_schools = apply_reallocation_moves_to_region_schools(
+                snapshot.region_schools,
+                moves,
+            )
         else:
             adjusted_region_schools = apply_reallocation_moves_to_region_schools(
                 snapshot.region_schools,
@@ -192,18 +196,22 @@ def main() -> int:
             minimum_per_region=8,
         )
         effective_counts = apply_reallocation_moves_to_counts(effective_counts, moves)
-        resurrection_quotas = estimate_resurrection_quotas(
+        
+        # 基于官方规则综合考虑分配复活赛名额
+        resurrection_quotas = estimate_resurrection_quotas_comprehensive(
             quota_result,
-            effective_counts,
+            adjusted_region_schools,
+            national_records,
+            ranking_map,
             resurrection_total=16,
             min_total_advancement=8,
             max_total_advancement=16,
         )
 
         if moves:
-            loop_notes.append("名额估算口径: 国赛与复活赛均按预测调剂后赛区分布计算")
+            loop_notes.append("名额估算口径: 国赛按调剂后分布计算; 复活赛按官方规则综合考虑(国赛名额+队伍质量+RMU积分)分配")
         else:
-            loop_notes.append("名额估算口径: 当前无调剂，国赛与复活赛按现有报名分布计算")
+            loop_notes.append("名额估算口径: 国赛与复活赛按现有报名分布计算")
 
         highlights = build_historical_highlights(snapshot, national_records)
 

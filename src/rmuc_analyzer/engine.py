@@ -37,33 +37,6 @@ def fallback_ranking_from_national(national_records: Dict[str, NationalTierRecor
     return {school_key: rec.rank_order for school_key, rec in national_records.items()}
 
 
-def infer_top16_counts(
-    national_records: Dict[str, NationalTierRecord],
-    distance_map: Dict[str, DistanceRecord],
-) -> Tuple[Dict[str, int], List[str]]:
-    counts = {region: 0 for region in REGION_ORDER}
-    missing: List[str] = []
-
-    for school_key, record in national_records.items():
-        if record.tier not in TOP16_TIERS:
-            continue
-
-        distance = distance_map.get(school_key)
-        if distance is None:
-            missing.append(record.school)
-            continue
-
-        region_distances = {
-            "南部": distance.to_changsha,
-            "东部": distance.to_jinan,
-            "北部": distance.to_shenyang,
-        }
-        nearest_region = min(region_distances, key=region_distances.get)
-        counts[nearest_region] += 1
-
-    return counts, missing
-
-
 def infer_top16_counts_from_regional_signup(
     national_records: Dict[str, NationalTierRecord],
     school_region_map: Dict[str, str],
@@ -168,27 +141,34 @@ def compute_national_quotas(
     return QuotaResult(items=items, tie_break_trace=trace)
 
 
-def estimate_resurrection_quotas(
+def estimate_resurrection_quotas_comprehensive(
     national_quota_result: QuotaResult,
-    region_counts: Dict[str, int],
+    adjusted_region_schools: Dict[str, List[str]],
+    national_records: Dict[str, NationalTierRecord],
+    ranking_map: Dict[str, int],
     resurrection_total: int = 16,
     min_total_advancement: int = 8,
     max_total_advancement: int = 16,
 ) -> Dict[str, int]:
     """
-    复活赛名额公开规则未给出精确权重，本函数用于网页展示的"模拟分配"。
+    基于官方规则综合考虑分配复活赛名额：
+    1. 全国赛晋级名额（提高权重，且与复活赛名额反向关联）
+    2. 上一赛季全国赛名单（仅统计全国赛队伍数量，不区分名次等级）
+    3. RMU 积分榜（弱势赛区适度补偿）
+
     分配原则：
-    1) 总数固定 resurrection_total。
-    2) 单赛区（国赛+复活）不超过 max_total_advancement。
-    3) 在可行空间内按当前志愿数占比做最大余数法分配。
+    - 复活赛按"补偿需求"分配（需求越高，复活赛越多）
+    - 全国赛名额越多，补偿需求越低（反向关系）
+    - 在满足总量与上限约束基础上，保证全国赛名额较少赛区的总晋级数不高于名额更多赛区
+    - 保证每赛区 [国赛+复活赛] ∈ [8, 16]
     """
     regions = list(REGION_ORDER)
+
     national_map = {
         region: national_quota_result.items[region].total_quota
         for region in regions
     }
 
-    # 最低总晋级约束在当前规则下通常由国赛基础名额已满足；保留以增强鲁棒性。
     base_resurrection = {
         region: max(0, min_total_advancement - national_map[region])
         for region in regions
@@ -197,25 +177,93 @@ def estimate_resurrection_quotas(
         region: max(0, max_total_advancement - national_map[region])
         for region in regions
     }
-
+    
     current = {
         region: min(base_resurrection[region], cap_resurrection[region])
         for region in regions
     }
+
     allocated = sum(current.values())
     remaining = resurrection_total - allocated
 
     if remaining <= 0:
         return current
 
-    weights = {region: max(0, region_counts.get(region, 0)) for region in regions}
-    total_weight = sum(weights.values())
-    if total_weight <= 0:
-        weights = {region: 1 for region in regions}
-        total_weight = len(regions)
+    # 预构建学校->战绩映射，避免重复遍历 national_records。
+    tier_by_school: Dict[str, str] = {
+        normalize_school_name(rec.school): rec.tier
+        for rec in national_records.values()
+    }
+
+    # 1) 上赛季全国赛名单数量（仅计全国赛队伍，不区分等级）。
+    national_list_count: Dict[str, int] = {}
+    for region in regions:
+        count = 0
+        for school in adjusted_region_schools.get(region, []):
+            tier = tier_by_school.get(normalize_school_name(school), "")
+            if tier in ("冠军", "亚军", "季军", "殿军", "八强", "十六强", "三十二强"):
+                count += 1
+        national_list_count[region] = count
+
+    # 2) RMU 综合指标：平均排名越靠前(数值越小)代表赛区更强。
+    avg_rank_map: Dict[str, float] = {}
+    for region in regions:
+        ranks: List[int] = []
+        for school in adjusted_region_schools.get(region, []):
+            rank = ranking_map.get(normalize_school_name(school))
+            if rank is not None:
+                ranks.append(rank)
+        avg_rank_map[region] = (sum(ranks) / len(ranks)) if ranks else 999.0
+
+    def _normalize(value: float, min_v: float, max_v: float, neutral: float = 0.5) -> float:
+        if max_v <= min_v:
+            return neutral
+        return (value - min_v) / (max_v - min_v)
+
+    quota_values = [national_map[r] for r in regions]
+    list_values = [national_list_count[r] for r in regions]
+    rank_values = [avg_rank_map[r] for r in regions]
+
+    min_q, max_q = min(quota_values), max(quota_values)
+    min_l, max_l = min(list_values), max(list_values)
+    min_r, max_r = min(rank_values), max(rank_values)
+
+    # 3) 构造"一反两正"综合得分：
+    # - 反向因素：全国赛名额（越多，复活赛倾向越少）
+    # - 正向因素：上一赛季全国赛名单数量（越多，复活赛倾向越多）
+    # - 正向因素：RMU综合强度（越强，复活赛倾向越多）
+    # 为避免波动过大，以 1.0 为基线，仅对归一化偏离 0.5 的部分做加减。
+    comprehensive_scores: Dict[str, float] = {}
+
+    # 固定权重：一反两正
+    # H: 上赛季全国赛名单数量（正向）
+    # R: RMU强度（正向）
+    # N: 全国赛名额（反向）
+    w_h = 0.40
+    w_r = 0.35
+    w_n = 0.40
+
+    for region in regions:
+        n_norm = _normalize(float(national_map[region]), float(min_q), float(max_q))
+        h_norm = _normalize(float(national_list_count[region]), float(min_l), float(max_l))
+        r_weak_norm = _normalize(avg_rank_map[region], min_r, max_r)
+        r_strength_norm = 1.0 - r_weak_norm
+
+        score = 1.0 + (
+            w_h * (h_norm - 0.5)
+            + w_r * (r_strength_norm - 0.5)
+            - w_n * (n_norm - 0.5)
+        )
+
+        comprehensive_scores[region] = max(0.05, score)
+
+    total_score = sum(comprehensive_scores.values())
+    if total_score <= 0:
+        comprehensive_scores = {region: 1.0 for region in regions}
+        total_score = float(len(regions))
 
     exact_add = {
-        region: (weights[region] / total_weight) * remaining
+        region: (comprehensive_scores[region] / total_score) * remaining
         for region in regions
     }
 
@@ -249,10 +297,48 @@ def estimate_resurrection_quotas(
 
             target = sorted(
                 candidates,
-                key=lambda r: (-remainders[r], -weights[r], REGION_ORDER.index(r)),
+                key=lambda r: (-remainders[r], -comprehensive_scores[r], REGION_ORDER.index(r)),
             )[0]
             current[target] += 1
             leftover -= 1
+
+    # 4) 约束修正：全国赛名额较少的赛区，其总晋级不得高于名额更多赛区。
+    # 即若 q_a < q_b，则 (q_a + r_a) <= (q_b + r_b)。
+    def _totals() -> Dict[str, int]:
+        return {region: national_map[region] + current[region] for region in regions}
+
+    totals = _totals()
+    changed = True
+    guard = 0
+    while changed and guard < 20:
+        guard += 1
+        changed = False
+        for low in regions:
+            for high in regions:
+                if national_map[low] >= national_map[high]:
+                    continue
+                if totals[low] <= totals[high]:
+                    continue
+                if current[low] <= base_resurrection[low]:
+                    continue
+
+                recipients = [
+                    r for r in regions
+                    if national_map[r] > national_map[low]
+                    and current[r] < cap_resurrection[r]
+                ]
+                if not recipients:
+                    continue
+
+                target = sorted(
+                    recipients,
+                    key=lambda r: (totals[r], -national_map[r], REGION_ORDER.index(r)),
+                )[0]
+
+                current[low] -= 1
+                current[target] += 1
+                totals = _totals()
+                changed = True
 
     return current
 

@@ -16,7 +16,7 @@ from rmuc_analyzer.engine import (
     apply_reallocation_moves_to_region_schools,
     build_effective_region_counts,
     compute_national_quotas,
-    estimate_resurrection_quotas,
+    estimate_resurrection_quotas_comprehensive,
     fallback_ranking_from_national,
     infer_top16_counts_from_region_schools,
     load_rmu_ranking,
@@ -368,11 +368,12 @@ def _build_payload(
         expected_total=runtime.config.expected_total_teams,
     )
 
+    adjusted_region_schools = apply_reallocation_moves_to_region_schools(snapshot.region_schools, moves)
+
     if runtime.config.manual_top16_counts:
         top16_counts = {region: int(runtime.config.manual_top16_counts.get(region, 0)) for region in REGION_ORDER}
         quota_source_note = "国赛名额来源: manual_top16_counts配置"
     else:
-        adjusted_region_schools = apply_reallocation_moves_to_region_schools(snapshot.region_schools, moves)
         top16_counts = infer_top16_counts_from_region_schools(adjusted_region_schools, runtime.national_records)
         if moves:
             quota_source_note = "国赛名额来源: 预测调剂后去年的16强实际报名数（实时）"
@@ -388,9 +389,11 @@ def _build_payload(
     )
     effective_counts = apply_reallocation_moves_to_counts(effective_counts, moves)
 
-    resurrection = estimate_resurrection_quotas(
+    resurrection = estimate_resurrection_quotas_comprehensive(
         quota_result,
-        effective_counts,
+        adjusted_region_schools,
+        runtime.national_records,
+        runtime.ranking_map,
         resurrection_total=16,
         min_total_advancement=8,
         max_total_advancement=16,
