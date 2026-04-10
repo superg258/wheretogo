@@ -1,5 +1,17 @@
 # RMUC 2026 三赛区分析器
 
+## 在线围观入口
+
+若不想自己搭建可以直接访问 GitHub Pages：
+
+[![Watch Live on GitHub Pages](https://img.shields.io/badge/Watch%20Live-GitHub%20Pages-1f6feb?style=for-the-badge&logo=github)](https://superg258.github.io/wheretogo/)
+
+- https://superg258.github.io/wheretogo/
+
+![项目页面预览](docs/preview-home.png)
+
+> 页面实时截图（采集时间：2026-04-10 15-13）
+
 面向 RMUC 三赛区报名态势的实时分析工具，支持网页看板和命令行两种使用方式。
 
 如果你是第一次接触 Python 项目，按下面的「3 分钟上手」一步一步做就能跑起来。
@@ -319,3 +331,7 @@ Hugging Face Space 的 Docker SDK 可以直接跑常驻 Flask 进程，免费、
 ## 免责声明
 
 本项目用于态势分析与辅助决策，最终录取与调剂结果请以官方公告为准。
+
+## 许可证
+
+本项目采用 MIT License，详见 LICENSE。
