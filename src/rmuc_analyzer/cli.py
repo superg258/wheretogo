@@ -206,6 +206,10 @@ def main() -> int:
             resurrection_total=16,
             min_total_advancement=8,
             max_total_advancement=16,
+            national_base_quota=config.resurrection_national_base_quota,
+            weight_history=config.resurrection_weight_history,
+            weight_rmu=config.resurrection_weight_rmu,
+            weight_national_excess=config.resurrection_weight_national_excess,
         )
 
         if moves:

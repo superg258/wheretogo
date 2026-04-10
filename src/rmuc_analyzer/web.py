@@ -397,6 +397,10 @@ def _build_payload(
         resurrection_total=16,
         min_total_advancement=8,
         max_total_advancement=16,
+        national_base_quota=runtime.config.resurrection_national_base_quota,
+        weight_history=runtime.config.resurrection_weight_history,
+        weight_rmu=runtime.config.resurrection_weight_rmu,
+        weight_national_excess=runtime.config.resurrection_weight_national_excess,
     )
 
     move_by_school = {normalize_school_name(m.school): m for m in moves}

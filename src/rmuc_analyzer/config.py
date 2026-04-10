@@ -26,6 +26,14 @@ class AnalyzerConfig:
     rmu_ranking_csv: str = "data/rmu_ranking.csv"
     cache_file: str = ".cache/latest_qingflow_snapshot.json"
     request_timeout_sec: int = 20
+    resurrection_weight_history: float = 0.40
+    resurrection_weight_rmu: float = 0.35
+    resurrection_weight_national_excess: float = 0.65
+    resurrection_national_base_quota: int = 8
+    resurrection_weight_history: float = 0.40
+    resurrection_weight_rmu: float = 0.35
+    resurrection_weight_national_excess: float = 0.65
+    resurrection_national_base_quota: int = 8
 
     @staticmethod
     def load(config_path: Optional[str], root_dir: Path) -> "AnalyzerConfig":

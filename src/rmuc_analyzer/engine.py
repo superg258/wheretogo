@@ -149,6 +149,10 @@ def estimate_resurrection_quotas_comprehensive(
     resurrection_total: int = 16,
     min_total_advancement: int = 8,
     max_total_advancement: int = 16,
+    national_base_quota: int = 8,
+    weight_history: float = 0.40,
+    weight_rmu: float = 0.35,
+    weight_national_excess: float = 0.65,
 ) -> Dict[str, int]:
     """
     基于官方规则综合考虑分配复活赛名额：
@@ -220,7 +224,13 @@ def estimate_resurrection_quotas_comprehensive(
             return neutral
         return (value - min_v) / (max_v - min_v)
 
-    quota_values = [national_map[r] for r in regions]
+    # 国赛名额负向项采用“超出基础名额”的部分，放大高名额赛区的副作用。
+    national_excess_map = {
+        r: max(0, national_map[r] - int(national_base_quota))
+        for r in regions
+    }
+
+    quota_values = [national_excess_map[r] for r in regions]
     list_values = [national_list_count[r] for r in regions]
     rank_values = [avg_rank_map[r] for r in regions]
 
@@ -235,16 +245,16 @@ def estimate_resurrection_quotas_comprehensive(
     # 为避免波动过大，以 1.0 为基线，仅对归一化偏离 0.5 的部分做加减。
     comprehensive_scores: Dict[str, float] = {}
 
-    # 固定权重：一反两正
+    # 可配置权重：一反两正
     # H: 上赛季全国赛名单数量（正向）
     # R: RMU强度（正向）
-    # N: 全国赛名额（反向）
-    w_h = 0.40
-    w_r = 0.35
-    w_n = 0.40
+    # N: 超出基础名额(national_base_quota)的全国赛名额（反向）
+    w_h = float(weight_history)
+    w_r = float(weight_rmu)
+    w_n = float(weight_national_excess)
 
     for region in regions:
-        n_norm = _normalize(float(national_map[region]), float(min_q), float(max_q))
+        n_norm = _normalize(float(national_excess_map[region]), float(min_q), float(max_q))
         h_norm = _normalize(float(national_list_count[region]), float(min_l), float(max_l))
         r_weak_norm = _normalize(avg_rank_map[region], min_r, max_r)
         r_strength_norm = 1.0 - r_weak_norm

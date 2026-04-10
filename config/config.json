@@ -21,5 +21,9 @@
   ],
   "rmu_ranking_csv": "data/rmu_ranking.csv",
   "cache_file": ".cache/latest_qingflow_snapshot.json",
-  "request_timeout_sec": 20
+  "request_timeout_sec": 20,
+  "resurrection_national_base_quota": 8,
+  "resurrection_weight_history": 0.40,
+  "resurrection_weight_rmu": 0.35,
+  "resurrection_weight_national_excess": 0.65
 }
